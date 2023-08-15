@@ -45,9 +45,13 @@ kubectl apply -f https://github.com/making/wws-supplychain/raw/main/wws-image-te
 
 ### Install ClusterConfigTemplate
 
+Change `ingress_domain` for your environment.
 
 ```
-kubectl apply -f https://github.com/making/wws-supplychain/raw/main/wws-config-template.yaml
+ytt -f https://github.com/making/wws-supplychain/raw/main/wws-config-template.yaml \
+  -v ingress_domain=wws.192-168-228-200.sslip.io \
+  -v cluster_issuer=tap-ingress-selfsigned \
+| kubectl apply -f-
 ```
 
 ### Install ClusterSupplyChain
