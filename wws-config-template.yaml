@@ -1,0 +1,107 @@
+---
+apiVersion: carto.run/v1alpha1
+kind: ClusterConfigTemplate
+metadata:
+  name: wws-config-template
+spec:
+  configPath: .data
+
+  healthRule:
+    alwaysHealthy: {}
+
+  ytt: |
+    #@ load("@ytt:data", "data")
+    #@ load("@ytt:yaml", "yaml")
+
+    #@ def merge_labels(fixed_values):
+    #@   labels = {}
+    #@   if hasattr(data.values.workload.metadata, "labels"):
+    #@     labels.update(data.values.workload.metadata.labels)
+    #@   end
+    #@   labels.update(fixed_values)
+    #@   return labels
+    #@ end
+    
+    #@ def merge_annotations(fixed_values):
+    #@   annotations = {}
+    #@   if hasattr(data.values.params, "annotations"):
+    #@     annotations.update(data.values.params.annotations)
+    #@   end
+    #@   annotations.update(fixed_values)
+    #@   return annotations
+    #@ end
+    
+    #@ def delivery():
+    ---
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: #@ data.values.workload.metadata.name
+      annotations:
+        kapp.k14s.io/update-strategy: "fallback-on-replace"
+      labels: #@ merge_labels({ "app.kubernetes.io/component": "run", "carto.run/workload-name": data.values.workload.metadata.name })
+    spec:
+      selector:
+        matchLabels: #@ data.values.config.metadata.labels
+      template: #@ data.values.config
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: #@ data.values.workload.metadata.name
+      labels: #@ merge_labels({ "app.kubernetes.io/component": "run", "carto.run/workload-name": data.values.workload.metadata.name })
+    spec:
+      selector: #@ data.values.config.metadata.labels
+      ports:
+      - protocol: TCP
+        port: 80
+        targetPort: 3000
+    #@ ingress_domain = "wws.192-168-228-200.sslip.io"
+    #@ cluster_issuer = "tap-ingress-selfsigned"
+    ---
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: #@ data.values.workload.metadata.name
+      annotations: #@ merge_annotations({"cert-manager.io/cluster-issuer": cluster_issuer, "ingress.kubernetes.io/force-ssl-redirect": "true"})
+      labels: #@ merge_labels({ "app.kubernetes.io/component": "run", "carto.run/workload-name": data.values.workload.metadata.name })
+    spec:
+      tls:
+        - secretName: #@ "{}-tls".format(data.values.workload.metadata.name)
+          hosts:
+          - #@ "{}-{}.{}".format(data.values.workload.metadata.name, data.values.workload.metadata.namespace, ingress_domain)
+      rules:
+      - host: #@ "{}-{}.{}".format(data.values.workload.metadata.name, data.values.workload.metadata.namespace, ingress_domain)
+        http:
+          paths:
+          - pathType: Prefix
+            path: /
+            backend:
+              service:
+                name: #@ data.values.workload.metadata.name
+                port:
+                  number: 80   
+    #@ end
+
+    ---
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: #@ data.values.workload.metadata.name + "-wws"
+      labels: #@ merge_labels({ "app.kubernetes.io/component": "config" })
+    data:
+      delivery.yml: #@ yaml.encode(delivery())
+      overlay.yaml: |
+        #@ load("@ytt:overlay", "overlay")
+        #@overlay/match by=overlay.subset({"kind":"Deployment"})
+        ---
+        spec:
+         template:
+           spec:
+             #@overlay/match missing_ok=True
+             runtimeClassName: wws
+             containers:
+             #@overlay/match by="name"
+             - name: workload
+               #@overlay/match missing_ok=True
+               command: ["/"]

@@ -1,0 +1,104 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wasm-tasks
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: wws-build
+  namespace: wasm-tasks
+spec:
+  params:
+  - name: source_tar
+    description: URL to tarball of source code
+    type: string
+  - name: image
+    description: Name (reference) of the image to build.
+    type: string
+  - name: sub_path
+    description: relative path inside the repo
+    type: string
+    default: ""
+  results:
+  - name: image_ref
+    description: Ref of the image just built.
+  steps:
+  - name: pull-source-code
+    image: ghcr.io/making/wasm-builder@sha256:8a3ba23d66665ac1ddf0c9540cb2c91bc83b86e636a5a46b6fd200131e280daf
+    script: |
+      #!/bin/sh
+      set -o errexit
+      set -o xtrace      
+      source="$(params.source_tar)"      
+      cd `mktemp -d`
+      curl -sL -o source.tar.gz "${source}"
+      tar --touch -xzf source.tar.gz -C /source
+    securityContext:
+      runAsUser: 0
+    volumeMounts:
+    - name: source-dir
+      mountPath: /source
+  - name: build
+    image: ghcr.io/making/wasm-builder@sha256:8a3ba23d66665ac1ddf0c9540cb2c91bc83b86e636a5a46b6fd200131e280daf
+    script: |
+      #!/bin/bash
+      set -ex
+      source /root/.profile
+      cd /source/$(params.sub_path)
+      if [ -f Makefile ];then
+        make
+      elif [ -f build.sh ];then
+        sh build.sh
+      elif [ -f Cargo.toml ];then
+        cargo build --target wasm32-wasi --release
+      elif [ -f pom.xml ];then
+        mvn package -V -Dmaven.test.skip=true --no-transfer-progress
+      elif [ -f main.go ];then
+        tinygo build -no-debug -o index.wasm -target wasi ./main.go
+      else
+        shopt -s dotglob
+        mv /source/$(params.sub_path)/* /wasm
+        exit 0
+      fi
+      if [ -d /source/$(params.sub_path)/.tap-output ];then
+        mv /source/.tap-output/* /wasm
+      fi
+      toml_file=$(find /source/$(params.sub_path) -maxdepth 1 -type f -name "*.toml" -print | grep -v Cargo.toml | head -n1)
+      if [ -n "${toml_file}" ]; then
+        wasm_basename=$(basename ${toml_file} .toml)      
+        mv $(find /source/$(params.sub_path) -name '*.wasm' -type f -print | grep -v '/deps/' | head -n1) /wasm/${wasm_basename}.wasm
+        mv ${toml_file} /wasm
+      else
+        mv $(find /source/$(params.sub_path) -name '*.wasm' -type f -print | grep -v '/deps/') /wasm
+      fi
+    securityContext:
+      runAsUser: 0
+    volumeMounts:
+    - name: source-dir
+      mountPath: /source
+    - name: wasm-dir
+      mountPath: /wasm
+  - name: push
+    image: ghcr.io/vmware-tanzu/carvel-docker-image
+    script: |
+      #!/bin/sh
+      set -ex
+      cd /wasm
+      mkdir -p .imgpkg/
+      cat <<EOF > .imgpkg/images.yml
+      apiVersion: imgpkg.carvel.dev/v1alpha1
+      kind: ImagesLock
+      EOF
+      imgpkg push -b $(params.image) -f . --lock-output package.lock
+      awk -F "image: " '{if ($2) printf "%s", $2}' package.lock | tee "$(results.image_ref.path)"
+    securityContext:
+      runAsUser: 0
+    volumeMounts:
+    - name: wasm-dir
+      mountPath: /wasm
+  volumes:
+  - name: source-dir
+    emptyDir: { }
+  - name: wasm-dir
+    emptyDir: { }

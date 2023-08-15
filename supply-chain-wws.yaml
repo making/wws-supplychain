@@ -1,0 +1,82 @@
+#@ load("@ytt:data", "data")
+#@ load("@ytt:assert", "assert")
+
+#@ data.values.registry.server or assert.fail("missing registry.server")
+#@ data.values.registry.repository or assert.fail("missing registry.repository")
+
+---
+apiVersion: carto.run/v1alpha1
+kind: ClusterSupplyChain
+metadata:
+  name: source-to-url-wws
+spec:
+  selectorMatchExpressions:
+  - key: 'apps.tanzu.vmware.com/workload-type'
+    operator: In
+    values:
+    - wws
+  resources:
+  - name: source-provider
+    templateRef:
+      kind: ClusterSourceTemplate
+      name: source-template
+    params:
+    - name: serviceAccount
+      default: #@ data.values.service_account
+    - name: gitImplementation
+      default: #@ data.values.git_implementation
+
+  - name: image-provider
+    templateRef:
+      kind: ClusterImageTemplate
+      name: wws-image-template
+    params:
+    - name: serviceAccount
+      default: #@ data.values.service_account
+    - name: registry
+      value: #@ data.values.registry
+    sources:
+    - resource: source-provider
+      name: source
+
+  - name: config-provider
+    templateRef:
+      kind: ClusterConfigTemplate
+      name: convention-template
+    params:
+    - name: serviceAccount
+      default: #@ data.values.service_account
+    images:
+    - resource: image-provider
+      name: image
+
+  - name: app-config
+    templateRef:
+      kind: ClusterConfigTemplate
+      name: wws-config-template
+    configs:
+    - resource: config-provider
+      name: config
+
+  - name: config-writer
+    templateRef:
+      kind: ClusterTemplate
+      name: config-writer-template
+    params:
+    - name: serviceAccount
+      default: #@ data.values.service_account
+    - name: registry
+      value: #@ data.values.registry
+    configs:
+    - resource: app-config
+      name: config
+
+  - name: deliverable
+    templateRef:
+      kind: ClusterTemplate
+      name: #@ "external-deliverable-template" if data.values.external_delivery else "deliverable-template"
+    params:
+    - name: registry
+      value: #@ data.values.registry
+    - name: gitImplementation
+      default: #@ data.values.git_implementation
