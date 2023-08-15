@@ -64,7 +64,7 @@ ytt -f https://github.com/making/wws-supplychain/raw/main/supply-chain-wws.yaml 
 | kubectl apply -f- 
 ```
 
-## Deploy　Workloads
+## Deploy Workloads
 
 
 ### Rust
