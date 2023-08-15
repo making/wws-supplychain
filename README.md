@@ -11,7 +11,7 @@ helm upgrade --install -n kwasm --create-namespace kwasm-operator kwasm/kwasm-op
 Enable kwasm on all node
 
 ```
-for node in $(kubectl get node --context kiwi-run -ojsonpath='{.items[*].metadata.name}');do
+for node in $(kubectl get node -ojsonpath='{.items[*].metadata.name}');do
   kubectl annotate node $node kwasm.sh/kwasm-node=true
 done
 ```
